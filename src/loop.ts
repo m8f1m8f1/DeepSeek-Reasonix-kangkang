@@ -192,6 +192,7 @@ export class CacheFirstLoop {
 
   private _turnSelfCorrected = false;
   private _foldedThisTurn = false;
+  private _preModelBlockCount = 0;
   private context!: ContextManager;
 
   /** Subscribe API so UI hooks can derive `running` from finally-guaranteed insertions. */
@@ -718,6 +719,7 @@ export class CacheFirstLoop {
     this.repair.resetStorm();
     this._turnSelfCorrected = false;
     this._foldedThisTurn = false;
+    this._preModelBlockCount = 0;
     // Fresh controller for this turn: the prior step's signal has
     // already fired (or stayed clean); either way we don't want its
     // state to bleed into the new turn.
@@ -863,12 +865,22 @@ export class CacheFirstLoop {
           },
         });
         if (preModelReport.blocked) {
+          this._preModelBlockCount++;
           const blocking = preModelReport.outcomes[preModelReport.outcomes.length - 1];
           const reason = (
             blocking?.stderr ||
             blocking?.stdout ||
             "PreModelCall hook blocked"
           ).trim();
+          if (this._preModelBlockCount >= 3) {
+            yield {
+              turn: this._turn,
+              role: "warning" as const,
+              content: `[hook block] PreModelCall blocked ${this._preModelBlockCount} times — aborting turn to prevent infinite loop. ${reason}`,
+            };
+            this._steerQueue.length = 0;
+            return;
+          }
           yield {
             turn: this._turn,
             role: "warning" as const,
