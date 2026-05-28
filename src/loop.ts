@@ -1258,6 +1258,7 @@ export class CacheFirstLoop {
               role: "warning" as const,
               content: `[hook gate] TurnEnd: ${reason}`,
             };
+            this._steerQueue.push(`[TurnEnd hook blocked] ${reason}`);
             continue;
           }
           this._turnEndBlockCount = 0;
