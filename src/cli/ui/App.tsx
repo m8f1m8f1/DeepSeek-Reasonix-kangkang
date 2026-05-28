@@ -1714,10 +1714,8 @@ function AppInner({
   const quitProcess = useQuit(transcriptRef, { beforeQuit: fireSessionEndHook });
 
   const quitWithSessionEnd = useCallback(() => {
-    fireSessionEndHook()
-      .then(() => quitProcess())
-      .catch(() => quitProcess());
-  }, [fireSessionEndHook, quitProcess]);
+    quitProcess();
+  }, [quitProcess]);
 
   // Ctrl+D = standard TUI exit (matches the boot-banner hint). Always-on
   // — no modal / picker should swallow it.
