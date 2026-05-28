@@ -944,7 +944,7 @@ export class CacheFirstLoop {
             yield {
               turn: this._turn,
               role: "warning" as const,
-              content: `[hook block] PreModelCall blocked ${this._preModelBlockCount} times — aborting turn to prevent infinite loop. ${reason}`,
+              content: `[hook block] PreModelCall blocked ${this._preModelBlockCount} consecutive times — aborting turn to prevent infinite loop. ${reason}`,
             };
             this._steerQueue.length = 0;
             return;
@@ -956,6 +956,7 @@ export class CacheFirstLoop {
           };
           continue;
         }
+        this._preModelBlockCount = 0;
         for (const o of preModelReport.outcomes) {
           if (o.decision !== "pass") {
             yield {
