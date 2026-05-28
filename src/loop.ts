@@ -2,7 +2,12 @@ import { type DeepSeekClient, Usage } from "./client.js";
 import type { ReasoningEffort } from "./config.js";
 import type { PauseGate } from "./core/pause-gate.js";
 import { pauseGate as defaultPauseGate } from "./core/pause-gate.js";
-import { type HookPayload, type ResolvedHook, runHooks } from "./hooks.js";
+import {
+  type HookPayload,
+  type ResolvedHook,
+  formatHookOutcomeMessage,
+  runHooks,
+} from "./hooks.js";
 import {
   DEFAULT_MAX_RESULT_CHARS,
   DEFAULT_MAX_RESULT_TOKENS,
@@ -187,6 +192,7 @@ export class CacheFirstLoop {
 
   private _turnSelfCorrected = false;
   private _foldedThisTurn = false;
+  private _preModelBlockCount = 0;
   private context!: ContextManager;
 
   /** Subscribe API so UI hooks can derive `running` from finally-guaranteed insertions. */
@@ -291,6 +297,20 @@ export class CacheFirstLoop {
       getFewShots: () => this.prefix.fewShots,
       onLogRewrite: () => this.readTracker.reset(),
     });
+
+    if (this.hooks.some((h) => h.event === "SessionStart")) {
+      runHooks({
+        hooks: this.hooks,
+        payload: {
+          event: "SessionStart",
+          cwd: this.hookCwd,
+          sessionName: this.sessionName ?? undefined,
+          turn: 0,
+        },
+      }).catch((err) => {
+        process.stderr.write(`[hooks] SessionStart error: ${(err as Error).message}\n`);
+      });
+    }
   }
 
   /** Replace older turns with one summary message; keep tail within keepRecentTokens budget. */
@@ -664,13 +684,42 @@ export class CacheFirstLoop {
     }
     this._turn++;
     this.scratch.reset();
-    // A fresh user turn is a new intent — don't let StormBreaker's
-    // old sliding window of (name, args) signatures keep blocking
-    // calls that are now legitimately on-task. The window repopulates
-    // naturally as this turn's tool calls flow through.
+
+    if (this.hooks.some((h) => h.event === "TurnStart")) {
+      const turnStartReport = await runHooks({
+        hooks: this.hooks,
+        payload: {
+          event: "TurnStart",
+          cwd: this.hookCwd,
+          turn: this._turn,
+        },
+      });
+      if (turnStartReport.blocked) {
+        const blocking = turnStartReport.outcomes[turnStartReport.outcomes.length - 1];
+        const reason = (blocking?.stderr || blocking?.stdout || "TurnStart hook blocked").trim();
+        yield {
+          turn: this._turn,
+          role: "warning" as const,
+          content: `[hook block] ${blocking?.hook.command ?? "<unknown>"}\n${reason}`,
+        };
+        this._steerQueue.length = 0;
+        return;
+      }
+      for (const o of turnStartReport.outcomes) {
+        if (o.decision !== "pass") {
+          yield {
+            turn: this._turn,
+            role: "warning" as const,
+            content: formatHookOutcomeMessage(o),
+          };
+        }
+      }
+    }
+
     this.repair.resetStorm();
     this._turnSelfCorrected = false;
     this._foldedThisTurn = false;
+    this._preModelBlockCount = 0;
     // Fresh controller for this turn: the prior step's signal has
     // already fired (or stayed clean); either way we don't want its
     // state to bleed into the new turn.
@@ -801,6 +850,56 @@ export class CacheFirstLoop {
         };
       }
 
+      if (this.hooks.some((h) => h.event === "PreModelCall")) {
+        const preModelReport = await runHooks({
+          hooks: this.hooks,
+          payload: {
+            event: "PreModelCall",
+            cwd: this.hookCwd,
+            turn: this._turn,
+            model: this.model,
+            modelMessages: messages.map((m) => ({
+              role: m.role,
+              content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
+            })),
+          },
+        });
+        if (preModelReport.blocked) {
+          this._preModelBlockCount++;
+          const blocking = preModelReport.outcomes[preModelReport.outcomes.length - 1];
+          const reason = (
+            blocking?.stderr ||
+            blocking?.stdout ||
+            "PreModelCall hook blocked"
+          ).trim();
+          if (this._preModelBlockCount >= 3) {
+            yield {
+              turn: this._turn,
+              role: "warning" as const,
+              content: `[hook block] PreModelCall blocked ${this._preModelBlockCount} consecutive times — aborting turn to prevent infinite loop. ${reason}`,
+            };
+            this._steerQueue.length = 0;
+            return;
+          }
+          yield {
+            turn: this._turn,
+            role: "warning" as const,
+            content: `[hook block] PreModelCall: ${reason}`,
+          };
+          continue;
+        }
+        this._preModelBlockCount = 0;
+        for (const o of preModelReport.outcomes) {
+          if (o.decision !== "pass") {
+            yield {
+              turn: this._turn,
+              role: "warning" as const,
+              content: formatHookOutcomeMessage(o),
+            };
+          }
+        }
+      }
+
       let assistantContent = "";
       let reasoningContent = "";
       let toolCalls: ToolCall[] = [];
@@ -908,6 +1007,39 @@ export class CacheFirstLoop {
       }
 
       this.scratch.reasoning = reasoningContent || null;
+
+      if (this.hooks.some((h) => h.event === "PostModelCall")) {
+        const postModelReport = await runHooks({
+          hooks: this.hooks,
+          payload: {
+            event: "PostModelCall",
+            cwd: this.hookCwd,
+            turn: this._turn,
+            modelResponse: {
+              role: "assistant",
+              content: assistantContent,
+              reasoning_content: reasoningContent || undefined,
+            },
+            usage: usage
+              ? {
+                  promptTokens: usage.promptTokens,
+                  completionTokens: usage.completionTokens,
+                  cacheHitTokens: usage.promptCacheHitTokens ?? 0,
+                  cacheMissTokens: usage.promptCacheMissTokens ?? 0,
+                }
+              : undefined,
+          },
+        });
+        for (const o of postModelReport.outcomes) {
+          if (o.decision !== "pass") {
+            yield {
+              turn: this._turn,
+              role: "warning" as const,
+              content: formatHookOutcomeMessage(o),
+            };
+          }
+        }
+      }
 
       const { calls: repairedCalls, report } = this.repair.process(
         toolCalls,
