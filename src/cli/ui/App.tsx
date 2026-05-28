@@ -1690,12 +1690,39 @@ function AppInner({
   }, [session, loop, codeMode, syncPendingCount, log, pendingEdits, startupInfoHints, system]);
 
   // Esc handles "abort the current turn" separately; Ctrl+C is the universal "I'm done" key.
-  const quitProcess = useQuit(transcriptRef);
+  const sessionStartTimeRef = useRef(Date.now());
+
+  const fireSessionEndHook = useCallback(async () => {
+    if (hookList.some((h) => h.event === "SessionEnd")) {
+      try {
+        await runHooks({
+          hooks: hookList,
+          payload: {
+            event: "SessionEnd",
+            cwd: currentRootDir,
+            sessionName: session ?? undefined,
+            sessionDurationMs: Date.now() - sessionStartTimeRef.current,
+            totalCostUsd: summary.totalCostUsd,
+          },
+        });
+      } catch {
+        // SessionEnd must not block exit
+      }
+    }
+  }, [hookList, currentRootDir, session, summary.totalCostUsd]);
+
+  const quitProcess = useQuit(transcriptRef, { beforeQuit: fireSessionEndHook });
+
+  const quitWithSessionEnd = useCallback(() => {
+    fireSessionEndHook()
+      .then(() => quitProcess())
+      .catch(() => quitProcess());
+  }, [fireSessionEndHook, quitProcess]);
 
   // Ctrl+D = standard TUI exit (matches the boot-banner hint). Always-on
   // — no modal / picker should swallow it.
   useKeystroke((ev) => {
-    if (ev.ctrl && ev.input === "d") quitProcess();
+    if (ev.ctrl && ev.input === "d") quitWithSessionEnd();
   });
 
   // Ctrl+R = verbose toggle. ReasoningCard / ToolCard skip elision while on.
@@ -1792,7 +1819,7 @@ function AppInner({
         isLoopActive,
         stopLoop,
         loop,
-        quitProcess,
+        quitProcess: quitWithSessionEnd,
       });
       return;
     }
@@ -1820,7 +1847,7 @@ function AppInner({
         isLoopActive,
         stopLoop,
         loop,
-        quitProcess,
+        quitProcess: quitWithSessionEnd,
       });
       return;
     }
@@ -3222,7 +3249,7 @@ function AppInner({
           codeModeOn: !!codeMode,
           isLoopActive,
           stopLoop,
-          quitProcess,
+          quitProcess: quitWithSessionEnd,
           pushHistory,
           resetPendingModals,
           text,
@@ -3627,7 +3654,7 @@ function AppInner({
       codeShowEdit,
       codeUndo,
       currentRootDir,
-      quitProcess,
+      quitWithSessionEnd,
       hookList,
       loop,
       latestVersion,

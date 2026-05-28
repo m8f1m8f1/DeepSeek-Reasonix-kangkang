@@ -7,25 +7,49 @@ import { join } from "node:path";
 import { projectHooksTrusted } from "./config.js";
 import { t } from "./i18n/index.js";
 
-export type HookEvent = "PreToolUse" | "PostToolUse" | "UserPromptSubmit" | "Stop";
+export type HookEvent =
+  | "SessionStart"
+  | "TurnStart"
+  | "PreToolUse"
+  | "PostToolUse"
+  | "UserPromptSubmit"
+  | "PreModelCall"
+  | "PostModelCall"
+  | "Stop"
+  | "SessionEnd";
 
-/** All four events as a const array — drives slash listing + validation. */
+/** All nine events as a const array — drives slash listing + validation. */
 export const HOOK_EVENTS: readonly HookEvent[] = [
+  "SessionStart",
+  "TurnStart",
   "PreToolUse",
   "PostToolUse",
   "UserPromptSubmit",
+  "PreModelCall",
+  "PostModelCall",
   "Stop",
+  "SessionEnd",
 ] as const;
 
 /** Only the gating events can block the loop. */
-const BLOCKING_EVENTS: ReadonlySet<HookEvent> = new Set(["PreToolUse", "UserPromptSubmit"]);
+const BLOCKING_EVENTS: ReadonlySet<HookEvent> = new Set([
+  "PreToolUse",
+  "UserPromptSubmit",
+  "TurnStart",
+  "PreModelCall",
+]);
 
 /** Per-event default timeout. Tool/prompt hooks gate progress, so they're tight. */
 const DEFAULT_TIMEOUTS_MS: Record<HookEvent, number> = {
+  SessionStart: 10_000,
+  TurnStart: 5_000,
   PreToolUse: 5_000,
-  UserPromptSubmit: 5_000,
   PostToolUse: 30_000,
+  UserPromptSubmit: 5_000,
+  PreModelCall: 10_000,
+  PostModelCall: 30_000,
   Stop: 30_000,
+  SessionEnd: 10_000,
 };
 
 export type HookScope = "project" | "global";
@@ -176,6 +200,21 @@ export interface HookPayload {
   lastAssistantText?: string;
   last_assistant_message?: string;
   turn?: number;
+
+  sessionName?: string;
+  sessionDurationMs?: number;
+  totalCostUsd?: number;
+
+  modelMessages?: ReadonlyArray<{ role: string; content: string }>;
+  model?: string;
+
+  modelResponse?: { role: string; content: string; reasoning_content?: string };
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    cacheHitTokens: number;
+    cacheMissTokens: number;
+  };
 }
 
 /** Test seam — same shape as Node's spawn but returns a Promise of the raw outcome bits. */
