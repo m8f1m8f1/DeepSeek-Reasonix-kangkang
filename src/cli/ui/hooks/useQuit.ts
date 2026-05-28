@@ -1,5 +1,5 @@
 import type { WriteStream } from "node:fs";
-import { type MutableRefObject, useCallback, useEffect } from "react";
+import { type MutableRefObject, useCallback, useEffect, useRef } from "react";
 import { stopAndSaveCpuProfile } from "../../cpu-prof.js";
 
 export interface UseQuitOptions {
@@ -11,7 +11,11 @@ export function useQuit(
   transcriptRef: MutableRefObject<WriteStream | null>,
   opts?: UseQuitOptions,
 ): () => void {
+  const quittingRef = useRef(false);
+
   const quitProcess = useCallback(() => {
+    if (quittingRef.current) return;
+    quittingRef.current = true;
     transcriptRef.current?.end();
     void (async () => {
       try {
