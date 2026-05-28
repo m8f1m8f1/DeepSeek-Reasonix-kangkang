@@ -164,6 +164,7 @@ export interface HookFiredEvent extends EventBase {
     | "UserPromptSubmit"
     | "PreModelCall"
     | "PostModelCall"
+    | "TurnEnd"
     | "Stop"
     | "SessionEnd";
   outcome: "ok" | "blocked" | "modified" | "error";

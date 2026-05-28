@@ -12,6 +12,7 @@ export interface HookRunRow {
     | "UserPromptSubmit"
     | "PreModelCall"
     | "PostModelCall"
+    | "TurnEnd"
     | "Stop"
     | "SessionEnd";
   outcome: "ok" | "blocked" | "modified" | "error";

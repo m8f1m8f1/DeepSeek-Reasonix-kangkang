@@ -15,10 +15,11 @@ export type HookEvent =
   | "UserPromptSubmit"
   | "PreModelCall"
   | "PostModelCall"
+  | "TurnEnd"
   | "Stop"
   | "SessionEnd";
 
-/** All nine events as a const array — drives slash listing + validation. */
+/** All ten events as a const array — drives slash listing + validation. */
 export const HOOK_EVENTS: readonly HookEvent[] = [
   "SessionStart",
   "TurnStart",
@@ -27,6 +28,7 @@ export const HOOK_EVENTS: readonly HookEvent[] = [
   "UserPromptSubmit",
   "PreModelCall",
   "PostModelCall",
+  "TurnEnd",
   "Stop",
   "SessionEnd",
 ] as const;
@@ -37,6 +39,7 @@ const BLOCKING_EVENTS: ReadonlySet<HookEvent> = new Set([
   "UserPromptSubmit",
   "TurnStart",
   "PreModelCall",
+  "TurnEnd",
 ]);
 
 /** Per-event default timeout. Tool/prompt hooks gate progress, so they're tight. */
@@ -48,6 +51,7 @@ const DEFAULT_TIMEOUTS_MS: Record<HookEvent, number> = {
   UserPromptSubmit: 5_000,
   PreModelCall: 10_000,
   PostModelCall: 30_000,
+  TurnEnd: 30_000,
   Stop: 30_000,
   SessionEnd: 10_000,
 };

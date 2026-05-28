@@ -215,6 +215,7 @@ export class CacheFirstLoop {
   private _turnSelfCorrected = false;
   private _foldedThisTurn = false;
   private _preModelBlockCount = 0;
+  private _turnEndBlockCount = 0;
   private context!: ContextManager;
 
   /** Subscribe API so UI hooks can derive `running` from finally-guaranteed insertions. */
@@ -766,10 +767,15 @@ export class CacheFirstLoop {
       }
     }
 
+    // A fresh user turn is a new intent — don't let StormBreaker's
+    // old sliding window of (name, args) signatures keep blocking
+    // calls that are now legitimately on-task. The window repopulates
+    // naturally as this turn's tool calls flow through.
     this.repair.resetStorm();
     this._turnSelfCorrected = false;
     this._foldedThisTurn = false;
     this._preModelBlockCount = 0;
+    this._turnEndBlockCount = 0;
     // Fresh controller for this turn: the prior step's signal has
     // already fired (or stayed clean); either way we don't want its
     // state to bleed into the new turn.
@@ -1221,6 +1227,51 @@ export class CacheFirstLoop {
           }
           return;
         }
+
+        if (this.hooks.some((h) => h.event === "TurnEnd")) {
+          const turnEndReport = await runHooks({
+            hooks: this.hooks,
+            payload: {
+              event: "TurnEnd",
+              cwd: this.hookCwd,
+              turn: this._turn,
+              lastAssistantText: assistantContent,
+              last_assistant_message: assistantContent,
+            },
+          });
+          if (turnEndReport.blocked) {
+            this._turnEndBlockCount++;
+            const blocking = turnEndReport.outcomes[turnEndReport.outcomes.length - 1];
+            const reason = (blocking?.stderr || blocking?.stdout || "TurnEnd hook blocked").trim();
+            if (this._turnEndBlockCount >= 3) {
+              yield {
+                turn: this._turn,
+                role: "warning" as const,
+                content: `[hook gate] TurnEnd blocked ${this._turnEndBlockCount} consecutive times — ending turn to prevent infinite loop. ${reason}`,
+              };
+              yield { turn: this._turn, role: "done", content: assistantContent };
+              this._steerQueue.length = 0;
+              return;
+            }
+            yield {
+              turn: this._turn,
+              role: "warning" as const,
+              content: `[hook gate] TurnEnd: ${reason}`,
+            };
+            continue;
+          }
+          this._turnEndBlockCount = 0;
+          for (const o of turnEndReport.outcomes) {
+            if (o.decision !== "pass") {
+              yield {
+                turn: this._turn,
+                role: "warning" as const,
+                content: formatHookOutcomeMessage(o),
+              };
+            }
+          }
+        }
+
         restoreModelIfNeeded();
         yield { turn: this._turn, role: "done", content: assistantContent };
         this._steerQueue.length = 0;
