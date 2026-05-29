@@ -761,7 +761,7 @@ export class CacheFirstLoop {
           });
           const fragments = sessionStartReport.outcomes
             .filter((o) => o.decision === "pass" && o.stdout.trim())
-            .map((o) => o.stdout.trim());
+            .map((o) => o.stdout.trim().slice(0, 4096));
           if (fragments.length > 0) {
             this.prefix.replaceSystem(
               `${this.prefix.system}\n\n[Session context]\n${fragments.join("\n")}`,
