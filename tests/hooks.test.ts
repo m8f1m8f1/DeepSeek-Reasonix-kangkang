@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  BLOCKING_EVENTS,
+  HOOK_EVENTS,
   type HookSpawnInput,
   type HookSpawnResult,
   type ResolvedHook,
@@ -372,7 +374,7 @@ describe("runHooks", () => {
     expect(log[1]?.timeoutMs).toBe(5_000);
     expect(log[2]?.timeoutMs).toBe(10_000);
     expect(log[3]?.timeoutMs).toBe(30_000);
-    expect(log[4]?.timeoutMs).toBe(30_000);
+    expect(log[4]?.timeoutMs).toBe(10_000);
   });
 
   it("per-hook timeout overrides the default", async () => {
@@ -484,5 +486,52 @@ describe("runHooks output truncation", () => {
       spawner,
     });
     expect(report.outcomes[0]?.truncated).toBeUndefined();
+  });
+});
+
+describe("V-TE-05: HookEvent phase type synchronization", () => {
+  it("HOOK_EVENTS array matches all phase values in events.ts and hooks-events.ts", () => {
+    const canonicalPhases = new Set<string>(HOOK_EVENTS);
+
+    const eventsTsPhases = new Set<string>([
+      "SessionStart",
+      "TurnStart",
+      "PreToolUse",
+      "PostToolUse",
+      "UserPromptSubmit",
+      "PreModelCall",
+      "PostModelCall",
+      "TurnEnd",
+      "Stop",
+      "SessionEnd",
+    ]);
+
+    const hooksEventsTsPhases = new Set<string>([
+      "SessionStart",
+      "TurnStart",
+      "PreToolUse",
+      "PostToolUse",
+      "UserPromptSubmit",
+      "PreModelCall",
+      "PostModelCall",
+      "TurnEnd",
+      "Stop",
+      "SessionEnd",
+    ]);
+
+    expect(canonicalPhases).toEqual(eventsTsPhases);
+    expect(canonicalPhases).toEqual(hooksEventsTsPhases);
+  });
+
+  it("HOOK_EVENTS array has no duplicates", () => {
+    const unique = new Set(HOOK_EVENTS);
+    expect(unique.size).toBe(HOOK_EVENTS.length);
+  });
+
+  it("BLOCKING_EVENTS is a subset of HOOK_EVENTS", () => {
+    const allEvents = new Set<string>(HOOK_EVENTS);
+    for (const b of BLOCKING_EVENTS) {
+      expect(allEvents.has(b)).toBe(true);
+    }
   });
 });

@@ -34,7 +34,7 @@ export const HOOK_EVENTS: readonly HookEvent[] = [
 ] as const;
 
 /** Only the gating events can block the loop. */
-const BLOCKING_EVENTS: ReadonlySet<HookEvent> = new Set([
+export const BLOCKING_EVENTS: ReadonlySet<HookEvent> = new Set([
   "PreToolUse",
   "UserPromptSubmit",
   "TurnStart",
@@ -51,7 +51,9 @@ const DEFAULT_TIMEOUTS_MS: Record<HookEvent, number> = {
   UserPromptSubmit: 5_000,
   PreModelCall: 10_000,
   PostModelCall: 30_000,
-  TurnEnd: 30_000,
+  // 10s is enough for a lightweight audit check; 30s × 3-strike = 90s worst-case
+  // wasted wait if a hook misbehaves (V-TE-04).
+  TurnEnd: 10_000,
   Stop: 30_000,
   SessionEnd: 10_000,
 };

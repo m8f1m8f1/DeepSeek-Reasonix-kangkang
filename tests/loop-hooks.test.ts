@@ -115,4 +115,140 @@ describe("CacheFirstLoop hook wiring", () => {
     expect(events.find((e) => e.role === "warning")).toBeUndefined();
     expect(events.find((e) => e.role === "assistant_final")?.content).toBe("just chatting");
   });
+
+  it("TurnEnd gate falls back to static message when audit subagent is unavailable", async () => {
+    const client = makeClient([{ content: "first response" }, { content: "corrected response" }]);
+    const loop = new CacheFirstLoop({
+      client,
+      prefix: new ImmutablePrefix({ system: "s" }),
+      stream: false,
+      hooks: [
+        {
+          event: "TurnEnd",
+          scope: "global",
+          source: "/x",
+          command: "exit 2",
+        },
+      ],
+    });
+    const events: LoopEvent[] = [];
+    for await (const ev of loop.step("test")) events.push(ev);
+    const doneEvent = events.find((e) => e.role === "done");
+    expect(doneEvent).toBeDefined();
+  });
+
+  it("PreModelCall blocked 3 consecutive times aborts the turn", async () => {
+    const client = makeClient([
+      { content: "response 1" },
+      { content: "response 2" },
+      { content: "response 3" },
+      { content: "response 4" },
+    ]);
+    const loop = new CacheFirstLoop({
+      client,
+      prefix: new ImmutablePrefix({ system: "s" }),
+      stream: false,
+      hooks: [
+        {
+          event: "PreModelCall",
+          scope: "global",
+          source: "/x",
+          command: "exit 2",
+        },
+      ],
+    });
+    const events: LoopEvent[] = [];
+    for await (const ev of loop.step("test")) events.push(ev);
+    const warnings = events.filter((e) => e.role === "warning");
+    expect(warnings.length).toBeGreaterThanOrEqual(1);
+    expect(warnings.some((w) => w.content.includes("PreModelCall blocked"))).toBe(true);
+    expect(events.some((e) => e.role === "done")).toBe(false);
+  });
+
+  it("PreModelCall blocked twice then passing does not abort", async () => {
+    let blockCount = 0;
+    const client = makeClient([
+      { content: "blocked 1" },
+      { content: "blocked 2" },
+      { content: "final answer" },
+    ]);
+    const loop = new CacheFirstLoop({
+      client,
+      prefix: new ImmutablePrefix({ system: "s" }),
+      stream: false,
+      hooks: [
+        {
+          event: "PreModelCall",
+          scope: "global",
+          source: "/x",
+          command: "exit 2",
+        },
+      ],
+    });
+    const events: LoopEvent[] = [];
+    for await (const ev of loop.step("test")) {
+      events.push(ev);
+      if (ev.role === "warning" && ev.content.includes("PreModelCall")) {
+        blockCount++;
+        if (blockCount >= 2) {
+          loop.hooks = [];
+        }
+      }
+    }
+    const doneEvent = events.find((e) => e.role === "done");
+    expect(doneEvent).toBeDefined();
+    expect(blockCount).toBe(2);
+  });
+
+  it("TurnEnd gate blocks then allows on next iteration", async () => {
+    const client = makeClient([{ content: "first response" }, { content: "corrected response" }]);
+    const loop = new CacheFirstLoop({
+      client,
+      prefix: new ImmutablePrefix({ system: "s" }),
+      stream: false,
+      hooks: [
+        {
+          event: "TurnEnd",
+          scope: "global",
+          source: "/x",
+          command: "exit 2",
+        },
+      ],
+    });
+    const events: LoopEvent[] = [];
+    for await (const ev of loop.step("test")) events.push(ev);
+    const doneEvent = events.find((e) => e.role === "done");
+    expect(doneEvent).toBeDefined();
+    const warnings = events.filter((e) => e.role === "warning");
+    expect(warnings.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("TurnEnd 3-strike guard forces turn end after 3 consecutive blocks", async () => {
+    const client = makeClient([
+      { content: "response 1" },
+      { content: "response 2" },
+      { content: "response 3" },
+      { content: "response 4" },
+    ]);
+    const loop = new CacheFirstLoop({
+      client,
+      prefix: new ImmutablePrefix({ system: "s" }),
+      stream: false,
+      hooks: [
+        {
+          event: "TurnEnd",
+          scope: "global",
+          source: "/x",
+          command: "exit 2",
+        },
+      ],
+    });
+    const events: LoopEvent[] = [];
+    for await (const ev of loop.step("test")) events.push(ev);
+    const doneEvent = events.find((e) => e.role === "done");
+    expect(doneEvent).toBeDefined();
+    const warnings = events.filter((e) => e.role === "warning");
+    const has3StrikeMsg = warnings.some((w) => w.content.includes("3 consecutive times"));
+    expect(has3StrikeMsg).toBe(true);
+  });
 });

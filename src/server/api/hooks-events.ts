@@ -4,6 +4,7 @@ import { sessionsDir as defaultSessionsDir } from "../../memory/session.js";
 
 export interface HookRunRow {
   hookName: string;
+  /** Must match HookEvent type in src/hooks.ts — keep in sync (V-TE-05). */
   phase:
     | "SessionStart"
     | "TurnStart"

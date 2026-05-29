@@ -156,6 +156,7 @@ export interface CheckpointRestoredEvent extends EventBase {
 export interface HookFiredEvent extends EventBase {
   type: "hook.fired";
   hookName: string;
+  /** Must match HookEvent type in src/hooks.ts — keep in sync (V-TE-05). */
   phase:
     | "SessionStart"
     | "TurnStart"
