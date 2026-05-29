@@ -777,7 +777,13 @@ export class CacheFirstLoop {
             }
           }
         } catch (err) {
-          console.warn(`[hooks] SessionStart error: ${(err as Error).message}`);
+          const msg = (err as Error).message ?? String(err);
+          console.warn(`[hooks] SessionStart error: ${msg}`);
+          yield {
+            turn: this._turn,
+            role: "warning" as const,
+            content: `[hooks] SessionStart error: ${msg}`,
+          };
         }
       }
     }
