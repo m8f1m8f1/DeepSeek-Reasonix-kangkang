@@ -239,6 +239,7 @@ export class CacheFirstLoop {
   private _foldedThisTurn = false;
   private _preModelBlockCount = 0;
   private _turnEndBlockCount = 0;
+  private _sessionStartExecuted = false;
   private context!: ContextManager;
 
   /** Subscribe API so UI hooks can derive `running` from finally-guaranteed insertions. */
@@ -345,20 +346,6 @@ export class CacheFirstLoop {
       getFewShots: () => this.prefix.fewShots,
       onLogRewrite: () => this.readTracker.reset(),
     });
-
-    if (this.hooks.some((h) => h.event === "SessionStart")) {
-      runHooks({
-        hooks: this.hooks,
-        payload: {
-          event: "SessionStart",
-          cwd: this.hookCwd,
-          sessionName: this.sessionName ?? undefined,
-          turn: 0,
-        },
-      }).catch((err) => {
-        process.stderr.write(`[hooks] SessionStart error: ${(err as Error).message}\n`);
-      });
-    }
   }
 
   /** Replace older turns with one summary message; keep tail within keepRecentTokens budget. */
@@ -758,6 +745,42 @@ export class CacheFirstLoop {
 
     this._turn++;
     this.scratch.reset();
+
+    if (!this._sessionStartExecuted) {
+      this._sessionStartExecuted = true;
+      if (this.hooks.some((h) => h.event === "SessionStart")) {
+        try {
+          const sessionStartReport = await runHooks({
+            hooks: this.hooks,
+            payload: {
+              event: "SessionStart",
+              cwd: this.hookCwd,
+              sessionName: this.sessionName ?? undefined,
+              turn: 0,
+            },
+          });
+          const fragments = sessionStartReport.outcomes
+            .filter((o) => o.decision === "pass" && o.stdout.trim())
+            .map((o) => o.stdout.trim());
+          if (fragments.length > 0) {
+            this.prefix.replaceSystem(
+              `${this.prefix.system}\n\n[Session context]\n${fragments.join("\n")}`,
+            );
+          }
+          for (const o of sessionStartReport.outcomes) {
+            if (o.decision !== "pass") {
+              yield {
+                turn: this._turn,
+                role: "warning" as const,
+                content: formatHookOutcomeMessage(o),
+              };
+            }
+          }
+        } catch (err) {
+          console.warn(`[hooks] SessionStart error: ${(err as Error).message}`);
+        }
+      }
+    }
 
     if (this.hooks.some((h) => h.event === "TurnStart")) {
       const turnStartReport = await runHooks({

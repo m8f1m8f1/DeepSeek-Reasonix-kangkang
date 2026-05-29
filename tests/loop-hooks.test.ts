@@ -251,4 +251,89 @@ describe("CacheFirstLoop hook wiring", () => {
     const has3StrikeMsg = warnings.some((w) => w.content.includes("3 consecutive times"));
     expect(has3StrikeMsg).toBe(true);
   });
+
+  it("SessionStart hook stdout is injected into system prompt", async () => {
+    const client = makeClient([{ content: "hello" }]);
+    const prefix = new ImmutablePrefix({ system: "original system" });
+    const loop = new CacheFirstLoop({
+      client,
+      prefix,
+      stream: false,
+      hooks: [
+        {
+          event: "SessionStart",
+          scope: "global",
+          source: "/x",
+          command: "echo injected-context-from-hook",
+        },
+      ],
+    });
+    const events: LoopEvent[] = [];
+    for await (const ev of loop.step("test")) events.push(ev);
+    expect(prefix.system).toContain("injected-context-from-hook");
+    expect(prefix.system).toContain("[Session context]");
+    expect(prefix.system).toContain("original system");
+  });
+
+  it("SessionStart hook only runs once across multiple steps", async () => {
+    const client1 = makeClient([{ content: "first" }]);
+    const client2 = makeClient([{ content: "second" }]);
+    const prefix = new ImmutablePrefix({ system: "s" });
+    const loop = new CacheFirstLoop({
+      client: client1,
+      prefix,
+      stream: false,
+      hooks: [
+        {
+          event: "SessionStart",
+          scope: "global",
+          source: "/x",
+          command: "echo once-only",
+        },
+      ],
+    });
+    for await (const ev of loop.step("test")) {
+    }
+    const systemAfterFirst = prefix.system;
+    expect(systemAfterFirst).toContain("once-only");
+
+    loop.client = client2;
+    for await (const ev of loop.step("test2")) {
+    }
+    expect(prefix.system).toBe(systemAfterFirst);
+  });
+
+  it("SessionStart hook with no stdout does not modify system prompt", async () => {
+    const client = makeClient([{ content: "hello" }]);
+    const prefix = new ImmutablePrefix({ system: "original" });
+    const loop = new CacheFirstLoop({
+      client,
+      prefix,
+      stream: false,
+      hooks: [
+        {
+          event: "SessionStart",
+          scope: "global",
+          source: "/x",
+          command: "exit 0",
+        },
+      ],
+    });
+    for await (const ev of loop.step("test")) {
+    }
+    expect(prefix.system).toBe("original");
+  });
+
+  it("no SessionStart hook means zero overhead", async () => {
+    const client = makeClient([{ content: "hello" }]);
+    const prefix = new ImmutablePrefix({ system: "original" });
+    const loop = new CacheFirstLoop({
+      client,
+      prefix,
+      stream: false,
+    });
+    for await (const ev of loop.step("test")) {
+    }
+    expect(prefix.system).toBe("original");
+  });
 });
