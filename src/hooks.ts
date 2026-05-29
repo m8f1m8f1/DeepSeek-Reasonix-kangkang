@@ -321,6 +321,10 @@ function defaultSpawner(input: HookSpawnInput): Promise<HookSpawnResult> {
       });
     });
 
+    // EPIPE when child closes stdin before parent finishes writing —
+    // safe to ignore (close handler fires with the correct exit code).
+    child.stdin.on("error", () => {});
+
     try {
       child.stdin.write(input.stdin);
       child.stdin.end();
