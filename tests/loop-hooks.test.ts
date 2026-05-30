@@ -116,7 +116,53 @@ describe("CacheFirstLoop hook wiring", () => {
     expect(events.find((e) => e.role === "assistant_final")?.content).toBe("just chatting");
   });
 
-  it("TurnEnd gate falls back to static message when audit subagent is unavailable", async () => {
+  it("TurnEnd @@INJECT protocol injects user message", async () => {
+    const client = makeClient([{ content: "first response" }, { content: "corrected response" }]);
+    const loop = new CacheFirstLoop({
+      client,
+      prefix: new ImmutablePrefix({ system: "s" }),
+      stream: false,
+      hooks: [
+        {
+          event: "TurnEnd",
+          scope: "global",
+          source: "/x",
+          command: "echo @@INJECT: Fix the TODO markers && exit 2",
+        },
+      ],
+    });
+    const events: LoopEvent[] = [];
+    for await (const ev of loop.step("test")) events.push(ev);
+    const doneEvent = events.find((e) => e.role === "done");
+    expect(doneEvent).toBeDefined();
+    const warnings = events.filter((e) => e.role === "warning");
+    expect(warnings.some((w) => w.content.includes("TurnEnd rejected"))).toBe(true);
+  });
+
+  it("TurnEnd @@WARN protocol yields warning", async () => {
+    const client = makeClient([{ content: "first response" }, { content: "corrected response" }]);
+    const loop = new CacheFirstLoop({
+      client,
+      prefix: new ImmutablePrefix({ system: "s" }),
+      stream: false,
+      hooks: [
+        {
+          event: "TurnEnd",
+          scope: "global",
+          source: "/x",
+          command: "echo @@WARN: Quality check failed && exit 2",
+        },
+      ],
+    });
+    const events: LoopEvent[] = [];
+    for await (const ev of loop.step("test")) events.push(ev);
+    const doneEvent = events.find((e) => e.role === "done");
+    expect(doneEvent).toBeDefined();
+    const warnings = events.filter((e) => e.role === "warning");
+    expect(warnings.some((w) => w.content.includes("Quality check failed"))).toBe(true);
+  });
+
+  it("TurnEnd without @@INJECT uses default message", async () => {
     const client = makeClient([{ content: "first response" }, { content: "corrected response" }]);
     const loop = new CacheFirstLoop({
       client,
@@ -135,6 +181,8 @@ describe("CacheFirstLoop hook wiring", () => {
     for await (const ev of loop.step("test")) events.push(ev);
     const doneEvent = events.find((e) => e.role === "done");
     expect(doneEvent).toBeDefined();
+    const warnings = events.filter((e) => e.role === "warning");
+    expect(warnings.length).toBeGreaterThanOrEqual(1);
   });
 
   it("PreModelCall blocked 3 consecutive times aborts the turn", async () => {
@@ -201,6 +249,7 @@ describe("CacheFirstLoop hook wiring", () => {
   });
 
   it("TurnEnd gate blocks then allows on next iteration", async () => {
+    let blockCount = 0;
     const client = makeClient([{ content: "first response" }, { content: "corrected response" }]);
     const loop = new CacheFirstLoop({
       client,
@@ -216,11 +265,18 @@ describe("CacheFirstLoop hook wiring", () => {
       ],
     });
     const events: LoopEvent[] = [];
-    for await (const ev of loop.step("test")) events.push(ev);
+    for await (const ev of loop.step("test")) {
+      events.push(ev);
+      if (ev.role === "warning" && ev.content.includes("TurnEnd")) {
+        blockCount++;
+        if (blockCount >= 1) {
+          loop.hooks = [];
+        }
+      }
+    }
     const doneEvent = events.find((e) => e.role === "done");
     expect(doneEvent).toBeDefined();
-    const warnings = events.filter((e) => e.role === "warning");
-    expect(warnings.length).toBeGreaterThanOrEqual(1);
+    expect(blockCount).toBe(1);
   });
 
   it("TurnEnd 3-strike guard forces turn end after 3 consecutive blocks", async () => {

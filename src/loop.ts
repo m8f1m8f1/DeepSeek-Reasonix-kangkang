@@ -69,7 +69,6 @@ import {
 import { SessionStats, type TurnStats } from "./telemetry/stats.js";
 import { ToolRegistry } from "./tools.js";
 import { ReadTracker } from "./tools/read-tracker.js";
-import { spawnSubagent } from "./tools/subagent.js";
 import type { ChatMessage, ToolCall } from "./types.js";
 
 export const MID_TURN_STEER_WRAPPER =
@@ -82,28 +81,6 @@ function formatSteerUserMessage(content: string): string {
 function parseNeedsProEscalation(content: string): boolean {
   return /^\s*<<<NEEDS_PRO(?::\s*[^>\n]{1,150})?>>>/.test(content);
 }
-
-const AUDIT_SUBAGENT_SYSTEM_PROMPT = `You are a code quality audit agent. Your job is to review AI assistant responses and provide specific, actionable feedback.
-
-Rules:
-- DO NOT modify any files or execute commands — you are an auditor only
-- Your output will be injected as user feedback to the main agent
-- Review the response for completeness, correctness, and safety
-- Check for logic errors, security vulnerabilities, or missing edge cases
-- Provide specific modification suggestions with file paths when applicable
-- Format your feedback as concise, actionable items
-- Keep your output under 500 characters
-- If no issues found, output "PASS: <brief reason>"
-- Be direct and constructive — the main agent needs precise guidance to self-correct`;
-
-const AUDIT_SUBAGENT_READ_ONLY_TOOLS = [
-  "read_file",
-  "search_content",
-  "glob",
-  "list_directory",
-  "search_files",
-  "find_in_code",
-] as const;
 
 export {
   fixToolCallPairing,
@@ -1310,13 +1287,36 @@ export class CacheFirstLoop {
               role: "warning" as const,
               content: `[hook gate] TurnEnd rejected assistant_final — ${reason}`,
             };
-            const auditFeedback = await this.runTurnEndAudit(assistantContent, reason);
-            this.appendAndPersist({
-              role: "user" as const,
-              content:
-                auditFeedback ??
-                `[TurnEnd gate] The previous response was rejected. Reason: ${reason}. Please address the feedback and respond differently.`,
-            });
+
+            const injectMessages: string[] = [];
+            const warnMessages: string[] = [];
+            for (const o of turnEndReport.outcomes) {
+              if (typeof o.stdout === "string" && o.stdout) {
+                for (const m of o.stdout.matchAll(/@@INJECT:\s*(.*?)(?:\n|$)/g)) {
+                  if (m[1]?.trim()) injectMessages.push(m[1].trim());
+                }
+                for (const m of o.stdout.matchAll(/@@WARN:\s*(.*?)(?:\n|$)/g)) {
+                  if (m[1]?.trim()) warnMessages.push(m[1].trim());
+                }
+              }
+            }
+
+            for (const w of warnMessages) {
+              yield { turn: this._turn, role: "warning" as const, content: w };
+            }
+
+            if (injectMessages.length > 0) {
+              this.appendAndPersist({
+                role: "user" as const,
+                content: injectMessages.join("\n"),
+              });
+            } else {
+              this.appendAndPersist({
+                role: "user" as const,
+                content: `[TurnEnd gate] The previous response was rejected. Reason: ${reason}. Please address the feedback and respond differently.`,
+              });
+            }
+
             this._steerQueue.push(`[TurnEnd hook blocked] ${reason}`);
             continue;
           }
@@ -1411,36 +1411,6 @@ export class CacheFirstLoop {
     // loop via return statements when it produces no more tool calls,
     // when the context guard fires, when an abort fires, or when a fatal
     // error escapes the inner try blocks.
-  }
-
-  private async runTurnEndAudit(assistantContent: string, reason: string): Promise<string | null> {
-    if (this._turnEndBlockCount >= 2) return null;
-    if (!assistantContent.trim()) return null;
-    if (this._turnAbort.signal.aborted) return null;
-
-    try {
-      const timeoutSignal = AbortSignal.timeout(20_000);
-      const auditSignal = AbortSignal.any
-        ? AbortSignal.any([timeoutSignal, this._turnAbort.signal])
-        : timeoutSignal;
-      const result = await spawnSubagent({
-        client: this.client,
-        parentRegistry: this.tools,
-        system: AUDIT_SUBAGENT_SYSTEM_PROMPT,
-        task: `Review the following AI response that was rejected by the TurnEnd gate.\n\nRejection reason: ${reason}\n\nAI response:\n${assistantContent.slice(0, 4000)}\n\nProvide specific feedback on what needs to be fixed.`,
-        maxResultChars: 2000,
-        parentSignal: auditSignal,
-        allowedTools: AUDIT_SUBAGENT_READ_ONLY_TOOLS,
-      });
-
-      if (result.success && result.output.trim()) {
-        return `[Audit Agent Report]\n${result.output.trim()}`;
-      }
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.warn(`[TurnEnd audit] subagent failed, falling back to static message: ${msg}`);
-    }
-    return null;
   }
 
   private summaryContext(): ForceSummaryContext {
